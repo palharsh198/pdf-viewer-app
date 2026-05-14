@@ -1,0 +1,13 @@
+class PdfModel {
+  final String title;
+  final String category;
+  final String description;
+  final String filePath;
+
+  PdfModel({
+    required this.title,
+    required this.category,
+    required this.description,
+    required this.filePath,
+  });
+}

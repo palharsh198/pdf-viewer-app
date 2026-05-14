@@ -1,0 +1,358 @@
+import 'package:flutter/foundation.dart';
+
+enum UserRole { user, admin }
+
+enum AppThemeMode { system, light, dark }
+
+enum AppLanguage { english, hindi }
+
+class AppUser {
+  final String id;
+  final String name;
+  final String email;
+  final String password;
+  final UserRole role;
+
+  const AppUser({
+    required this.id,
+    required this.name,
+    required this.email,
+    required this.password,
+    required this.role,
+  });
+
+  AppUser copyWith({
+    String? id,
+    String? name,
+    String? email,
+    String? password,
+    UserRole? role,
+  }) {
+    return AppUser(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      email: email ?? this.email,
+      password: password ?? this.password,
+      role: role ?? this.role,
+    );
+  }
+}
+
+class PdfModel {
+  final String id;
+  final String title;
+  final String category;
+  final String description;
+  final String fileName;
+  final List<int>? bytes;
+  final String? url;
+  final DateTime createdAt;
+
+  const PdfModel({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.description,
+    required this.fileName,
+    required this.createdAt,
+    this.bytes,
+    this.url,
+  });
+
+  PdfModel copyWith({
+    String? id,
+    String? title,
+    String? category,
+    String? description,
+    String? fileName,
+    List<int>? bytes,
+    String? url,
+    DateTime? createdAt,
+  }) {
+    return PdfModel(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      category: category ?? this.category,
+      description: description ?? this.description,
+      fileName: fileName ?? this.fileName,
+      bytes: bytes ?? this.bytes,
+      url: url ?? this.url,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+}
+
+class AppStore extends ChangeNotifier {
+  AppStore._();
+
+  static final AppStore instance = AppStore._();
+
+  AppUser? currentUser;
+
+  AppThemeMode themeMode = AppThemeMode.system;
+  AppLanguage language = AppLanguage.english;
+
+  final List<AppUser> users = [
+    const AppUser(
+      id: 'admin-1',
+      name: 'Admin',
+      email: 'admin@gmail.com',
+      password: '123456',
+      role: UserRole.admin,
+    ),
+    const AppUser(
+      id: 'user-1',
+      name: 'Harshit',
+      email: 'user@gmail.com',
+      password: '123456',
+      role: UserRole.user,
+    ),
+  ];
+
+  final List<String> categories = [
+    'Programming',
+    'Database',
+    'Education',
+    'Artificial Intelligence',
+    'General',
+  ];
+
+  final List<PdfModel> pdfs = [
+    PdfModel(
+      id: 'pdf-1',
+      title: 'Flutter Notes',
+      category: 'Programming',
+      description: 'Flutter widgets and layouts notes.',
+      fileName: 'flutter_notes.pdf',
+      url: 'https://cdn.syncfusion.com/content/PDFViewer/flutter-succinctly.pdf',
+      createdAt: DateTime.now(),
+    ),
+    PdfModel(
+      id: 'pdf-2',
+      title: 'DBMS Notes',
+      category: 'Database',
+      description: 'DBMS concepts and SQL notes.',
+      fileName: 'dbms_notes.pdf',
+      url: 'https://cdn.syncfusion.com/content/PDFViewer/flutter-succinctly.pdf',
+      createdAt: DateTime.now(),
+    ),
+  ];
+
+  final Map<String, Set<String>> bookmarksByUser = {};
+
+  String _newId(String prefix) => '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+
+  void updateTheme(AppThemeMode mode) {
+    themeMode = mode;
+    notifyListeners();
+  }
+
+  void updateLanguage(AppLanguage value) {
+    language = value;
+    notifyListeners();
+  }
+
+  String? login({
+    required String email,
+    required String password,
+    required UserRole role,
+  }) {
+    try {
+      final user = users.firstWhere(
+            (u) =>
+        u.email.trim().toLowerCase() == email.trim().toLowerCase() &&
+            u.password == password &&
+            u.role == role,
+      );
+      currentUser = user;
+      notifyListeners();
+      return null;
+    } catch (_) {
+      return 'Invalid credentials';
+    }
+  }
+
+  String? signup({
+    required String name,
+    required String email,
+    required String password,
+  }) {
+    final cleanEmail = email.trim().toLowerCase();
+    if (users.any((u) => u.email.toLowerCase() == cleanEmail)) {
+      return 'Email already exists';
+    }
+
+    final user = AppUser(
+      id: _newId('user'),
+      name: name.trim(),
+      email: cleanEmail,
+      password: password,
+      role: UserRole.user,
+    );
+
+    users.add(user);
+    currentUser = user;
+    notifyListeners();
+    return null;
+  }
+
+  void logout() {
+    currentUser = null;
+    notifyListeners();
+  }
+
+  bool isBookmarked(String pdfId) {
+    final uid = currentUser?.id;
+    if (uid == null) return false;
+    return bookmarksByUser[uid]?.contains(pdfId) ?? false;
+  }
+
+  void toggleBookmark(String pdfId) {
+    final uid = currentUser?.id;
+    if (uid == null) return;
+
+    final set = bookmarksByUser.putIfAbsent(uid, () => <String>{});
+    if (set.contains(pdfId)) {
+      set.remove(pdfId);
+    } else {
+      set.add(pdfId);
+    }
+    notifyListeners();
+  }
+
+  List<PdfModel> userBookmarks() {
+    final uid = currentUser?.id;
+    if (uid == null) return [];
+    final ids = bookmarksByUser[uid] ?? <String>{};
+    return pdfs.where((p) => ids.contains(p.id)).toList();
+  }
+
+  String? addPdf({
+    required String title,
+    required String category,
+    required String description,
+    required String fileName,
+    List<int>? bytes,
+    String? url,
+  }) {
+    if (title.trim().isEmpty ||
+        category.trim().isEmpty ||
+        description.trim().isEmpty) {
+      return 'Fill all fields';
+    }
+
+    if ((bytes == null || bytes.isEmpty) && (url == null || url.trim().isEmpty)) {
+      return 'Select PDF file or enter URL';
+    }
+
+    pdfs.insert(
+      0,
+      PdfModel(
+        id: _newId('pdf'),
+        title: title.trim(),
+        category: category.trim(),
+        description: description.trim(),
+        fileName: fileName,
+        bytes: bytes,
+        url: (url == null || url.trim().isEmpty) ? null : url.trim(),
+        createdAt: DateTime.now(),
+      ),
+    );
+
+    if (!categories.contains(category.trim())) {
+      categories.add(category.trim());
+    }
+
+    notifyListeners();
+    return null;
+  }
+
+  String? updatePdf(PdfModel updated) {
+    final index = pdfs.indexWhere((p) => p.id == updated.id);
+    if (index == -1) return 'PDF not found';
+    pdfs[index] = updated;
+    if (!categories.contains(updated.category)) {
+      categories.add(updated.category);
+    }
+    notifyListeners();
+    return null;
+  }
+
+  void deletePdf(String id) {
+    pdfs.removeWhere((p) => p.id == id);
+    for (final entry in bookmarksByUser.values) {
+      entry.remove(id);
+    }
+    notifyListeners();
+  }
+
+  void addCategory(String name) {
+    final value = name.trim();
+    if (value.isNotEmpty && !categories.contains(value)) {
+      categories.add(value);
+      notifyListeners();
+    }
+  }
+
+  void renameCategory(String oldName, String newName) {
+    final value = newName.trim();
+    if (value.isEmpty) return;
+
+    final index = categories.indexOf(oldName);
+    if (index != -1) {
+      categories[index] = value;
+      for (var i = 0; i < pdfs.length; i++) {
+        if (pdfs[i].category == oldName) {
+          pdfs[i] = pdfs[i].copyWith(category: value);
+        }
+      }
+      notifyListeners();
+    }
+  }
+
+  void deleteCategory(String name) {
+    categories.remove(name);
+    for (var i = 0; i < pdfs.length; i++) {
+      if (pdfs[i].category == name) {
+        pdfs[i] = pdfs[i].copyWith(category: 'General');
+      }
+    }
+    if (!categories.contains('General')) {
+      categories.add('General');
+    }
+    notifyListeners();
+  }
+
+  void addUser({
+    required String name,
+    required String email,
+    required String password,
+    required UserRole role,
+  }) {
+    users.add(
+      AppUser(
+        id: _newId('user'),
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        password: password,
+        role: role,
+      ),
+    );
+    notifyListeners();
+  }
+
+  void updateUser(AppUser updated) {
+    final index = users.indexWhere((u) => u.id == updated.id);
+    if (index != -1) {
+      users[index] = updated;
+      notifyListeners();
+    }
+  }
+
+  void deleteUser(String id) {
+    if (currentUser?.id == id) return;
+    users.removeWhere((u) => u.id == id);
+    bookmarksByUser.remove(id);
+    notifyListeners();
+  }
+}
