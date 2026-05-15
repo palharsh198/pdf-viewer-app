@@ -13,6 +13,7 @@ const { execFile } = require("child_process");
 const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 const libre = require("libreoffice-convert");
+const PDFDocument = require("pdfkit");
 const sharp = require("sharp");
 const PptxGenJS = require("pptxgenjs");
 const XLSX = require("xlsx");
@@ -250,6 +251,51 @@ app.post("/convert-office-to-pdf", upload.single("file"), async (req, res) => {
   } catch (error) {
     console.error("Convert route error:", error);
     res.status(500).json({ error: "Conversion failed" });
+  }
+});
+app.post("/image-to-pdf", upload.array("images"), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "Images required" });
+    }
+
+    const doc = new PDFDocument({
+      autoFirstPage: false,
+    });
+
+    const chunks = [];
+
+    doc.on("data", (chunk) => chunks.push(chunk));
+
+    doc.on("end", () => {
+      const pdfBuffer = Buffer.concat(chunks);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="images.pdf"'
+      );
+
+      res.send(pdfBuffer);
+    });
+
+    for (const file of req.files) {
+      doc.addPage({
+        size: "A4",
+        margin: 20,
+      });
+
+      doc.image(file.path, 20, 20, {
+        fit: [555, 800],
+        align: "center",
+        valign: "center",
+      });
+    }
+
+    doc.end();
+  } catch (error) {
+    console.error("IMAGE TO PDF ERROR:", error);
+    res.status(500).json({ error: "Image to PDF failed" });
   }
 });
 app.post("/pdf-to-jpg", upload.single("pdf"), async (req, res) => {
