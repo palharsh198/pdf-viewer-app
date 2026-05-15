@@ -121,7 +121,7 @@ app.post("/api/upload-pdf", upload.single("pdf"), async (req, res) => {
       ownerId: req.body.ownerId,
       fileName: req.file.originalname,
       filePath: req.file.path,
-      fileUrl: `http://192.168.29.74:5000/uploads/${req.file.filename}`,
+      fileUrl: `${process.env.BASE_URL}/uploads/${req.file.filename}`,
     });
 
     res.json(pdf);
