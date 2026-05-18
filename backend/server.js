@@ -5,7 +5,12 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const { Document, Packer, Paragraph } = require("docx");
 const cors = require("cors");
-const { PDFDocument, rgb, StandardFonts, degrees } = require("pdf-lib");
+const {
+  PDFDocument: PdfLibDocument,
+  rgb,
+  StandardFonts,
+  degrees,
+} = require("pdf-lib");
 const fs = require("fs");
 const path = require("path");
 
@@ -464,7 +469,7 @@ app.post("/rotate-pdf", upload.single("pdf"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "PDF required" });
 
-    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+    const pdfDoc = await PdfLibDocument.load(fs.readFileSync(req.file.path));
     pdfDoc.getPages().forEach((page) => {
       const current = page.getRotation().angle;
       page.setRotation(degrees(current + 90));
@@ -485,7 +490,7 @@ app.post("/add-page-numbers", upload.single("pdf"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "PDF required" });
 
-    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+    const pdfDoc = await PdfLibDocument.load(fs.readFileSync(req.file.path));
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
     const pages = pdfDoc.getPages();
@@ -518,7 +523,7 @@ app.post("/add-watermark", upload.single("pdf"), async (req, res) => {
 
     const watermarkText = req.body.watermark || "PDF Viewer App";
 
-    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+    const pdfDoc = await PdfLibDocument.load(fs.readFileSync(req.file.path));
     const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     pdfDoc.getPages().forEach((page) => {
@@ -550,7 +555,7 @@ app.post("/crop-pdf", upload.single("pdf"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "PDF required" });
 
-    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+    const pdfDoc = await PdfLibDocument.load(fs.readFileSync(req.file.path));
 
     pdfDoc.getPages().forEach((page) => {
       const { width, height } = page.getSize();
