@@ -5,6 +5,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const { Document, Packer, Paragraph } = require("docx");
 const cors = require("cors");
+const { PDFDocument, rgb, StandardFonts, degrees } = require("pdf-lib");
 const fs = require("fs");
 const path = require("path");
 
@@ -459,7 +460,119 @@ app.post("/pdf-to-excel", upload.single("pdf"), async (req, res) => {
     res.status(500).json({ error: error.message || "PDF to Excel failed" });
   }
 });
+app.post("/rotate-pdf", upload.single("pdf"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "PDF required" });
 
+    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+    pdfDoc.getPages().forEach((page) => {
+      const current = page.getRotation().angle;
+      page.setRotation(degrees(current + 90));
+    });
+
+    const bytes = await pdfDoc.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="rotated.pdf"');
+    res.send(Buffer.from(bytes));
+  } catch (error) {
+    console.error("ROTATE PDF ERROR:", error);
+    res.status(500).json({ error: "Rotate PDF failed" });
+  }
+});
+
+app.post("/add-page-numbers", upload.single("pdf"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "PDF required" });
+
+    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    const pages = pdfDoc.getPages();
+
+    pages.forEach((page, index) => {
+      const { width } = page.getSize();
+      page.drawText(`${index + 1}`, {
+        x: width / 2,
+        y: 25,
+        size: 12,
+        font,
+        color: rgb(0.2, 0.2, 0.2),
+      });
+    });
+
+    const bytes = await pdfDoc.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="numbered.pdf"');
+    res.send(Buffer.from(bytes));
+  } catch (error) {
+    console.error("PAGE NUMBER ERROR:", error);
+    res.status(500).json({ error: "Add page numbers failed" });
+  }
+});
+
+app.post("/add-watermark", upload.single("pdf"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "PDF required" });
+
+    const watermarkText = req.body.watermark || "PDF Viewer App";
+
+    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+    const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    pdfDoc.getPages().forEach((page) => {
+      const { width, height } = page.getSize();
+
+      page.drawText(watermarkText, {
+        x: width / 4,
+        y: height / 2,
+        size: 38,
+        font,
+        color: rgb(0.7, 0.7, 0.7),
+        rotate: degrees(-35),
+        opacity: 0.35,
+      });
+    });
+
+    const bytes = await pdfDoc.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="watermarked.pdf"');
+    res.send(Buffer.from(bytes));
+  } catch (error) {
+    console.error("WATERMARK ERROR:", error);
+    res.status(500).json({ error: "Add watermark failed" });
+  }
+});
+
+app.post("/crop-pdf", upload.single("pdf"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "PDF required" });
+
+    const pdfDoc = await PDFDocument.load(fs.readFileSync(req.file.path));
+
+    pdfDoc.getPages().forEach((page) => {
+      const { width, height } = page.getSize();
+
+      page.setCropBox(
+        25,
+        25,
+        width - 50,
+        height - 50
+      );
+    });
+
+    const bytes = await pdfDoc.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="cropped.pdf"');
+    res.send(Buffer.from(bytes));
+  } catch (error) {
+    console.error("CROP PDF ERROR:", error);
+    res.status(500).json({ error: "Crop PDF failed" });
+  }
+});
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
 });
