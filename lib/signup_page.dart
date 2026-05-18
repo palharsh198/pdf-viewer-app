@@ -35,6 +35,8 @@ class _SignupPageState extends State<SignupPage> {
   }
 
   void signup() async {
+
+    if (isLoading) return;
     final name = nameController.text.trim();
     final email = emailController.text.trim();
     final password = passwordController.text.trim();
@@ -95,6 +97,8 @@ class _SignupPageState extends State<SignupPage> {
       );
       return;
     }
+
+    if (!mounted) return;
 
     Navigator.pushReplacement(
       context,

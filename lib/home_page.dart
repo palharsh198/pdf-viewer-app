@@ -25,8 +25,13 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  
-final String baseUrl = "http://192.168.29.74:5000";
+
+  final  bool useOnlineBackend = true;
+
+  late final String baseUrl = useOnlineBackend
+      ? "https://pdf-viewer-app-4.onrender.com"
+      : "http://192.168.29.74:5000";
+
 final Set<String> bookmarkedIds = {};
 late Future<List<PdfModel>> pdfFuture;
 
@@ -92,7 +97,7 @@ Future<List<PdfModel>> fetchPdfsFromDatabase() async {
   try {
     final response = await http.get(
       Uri.parse(
-        "http://192.168.29.74:5000/api/pdfs/${store.currentUser?.id ?? ""}",
+        "https://pdf-viewer-app.onrender.com/api/pdfs/${store.currentUser?.id ?? ""}",
       ),
     )
     .timeout(const Duration(seconds: 10),
@@ -491,7 +496,17 @@ Future<void> downloadPdf(PdfModel pdf) async {
 }
 Future<void> sharePdf(PdfModel pdf) async {
   try {
-    final bytes = _pdfBytes(pdf);
+    Uint8List? bytes = _pdfBytes(pdf);
+
+    if ((bytes == null || bytes.isEmpty) &&
+        pdf.url != null &&
+        pdf.url!.trim().isNotEmpty) {
+      final response = await http.get(Uri.parse(pdf.url!.trim()));
+
+      if (response.statusCode == 200) {
+        bytes = response.bodyBytes;
+      }
+    }
 
     if (bytes != null && bytes.isNotEmpty) {
       final dir = await getApplicationDocumentsDirectory();
@@ -505,10 +520,11 @@ Future<void> sharePdf(PdfModel pdf) async {
       await file.writeAsBytes(bytes, flush: true);
 
       await Share.shareXFiles(
-        [XFile(file.path)],
-        text: pdf.title,
+        [XFile(file.path, mimeType: "application/pdf")],
+        text: pdf.url != null && pdf.url!.trim().isNotEmpty
+            ? "${pdf.title}\n${pdf.url}"
+            : pdf.title,
       );
-
       return;
     }
 
@@ -600,7 +616,112 @@ Future<void> convertPdfToWord(PdfModel pdf) async {
     );
   }
 }
+Future<void> convertPdfFromPdf({
+  required PdfModel pdf,
+  required String endpoint,
+  required String outputExt,
+  required String successText,
+}) async {
+  try {
+    Uint8List? bytes = _pdfBytes(pdf);
 
+    if ((bytes == null || bytes.isEmpty) &&
+        pdf.url != null &&
+        pdf.url!.trim().isNotEmpty) {
+      final res = await http.get(Uri.parse(pdf.url!.trim()));
+      if (res.statusCode == 200) bytes = res.bodyBytes;
+    }
+
+    if (bytes == null || bytes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("PDF file data not found")),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Converting $successText...")),
+    );
+
+    final request = http.MultipartRequest(
+      "POST",
+      Uri.parse("$baseUrl/$endpoint"),
+    );
+
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        "pdf",
+        bytes,
+        filename: pdf.fileName,
+      ),
+    );
+
+    final response = await request.send();
+
+    if (response.statusCode == 200) {
+      final outBytes = await response.stream.toBytes();
+
+      final dir = await getApplicationDocumentsDirectory();
+
+      final safeName = pdf.fileName
+          .replaceAll(".pdf", "")
+          .replaceAll(".PDF", "")
+          .replaceAll(RegExp(r'[\\/:*?"<>|]'), "_");
+
+      final file = File("${dir.path}/$safeName.$outputExt");
+
+      await file.writeAsBytes(outBytes, flush: true);
+      await OpenFilex.open(file.path);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("$successText created successfully")),
+      );
+    } else {
+      final error = await response.stream.bytesToString();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Conversion failed: $error")),
+      );
+    }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Conversion error: $e")),
+    );
+  }
+}
+
+Future<void> pickPdfForConvertFromPdf(
+    String endpoint,
+    String ext,
+    String name,
+    ) async {
+  final result = await FilePicker.platform.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: ['pdf'],
+    withData: true,
+  );
+
+  if (result == null || result.files.single.bytes == null) return;
+
+  final file = result.files.single;
+
+  final tempPdf = PdfModel(
+    id: DateTime.now().millisecondsSinceEpoch.toString(),
+    title: file.name,
+    category: "Convert from PDF",
+    description: name,
+    fileName: file.name,
+    bytes: file.bytes,
+    ownerId: store.currentUser?.id ?? "user-1",
+    createdAt: DateTime.now(),
+  );
+
+  await convertPdfFromPdf(
+    pdf: tempPdf,
+    endpoint: endpoint,
+    outputExt: ext,
+    successText: name,
+  );
+}
 
   void addCategory() {
     final name = categoryController.text.trim();
@@ -812,6 +933,8 @@ Widget _buildSidebar({required bool closeDrawer}) {
     (tr("Organize PDF", "पीडीएफ व्यवस्थित करें"), Icons.folder_copy_rounded),
     (tr("Convert to PDF", "पीडीएफ कन्वर्ट"),
     Icons.picture_as_pdf_rounded),
+    (tr("Convert from PDF", "पीडीएफ से कन्वर्ट"),
+    Icons.transform_rounded),
     (tr("Upload PDF", "पीडीएफ अपलोड"), Icons.upload_file),
     (tr("Edit PDF", "पीडीएफ एडिट"), Icons.edit),
     (tr("Delete PDF", "पीडीएफ डिलीट"), Icons.delete),
@@ -920,260 +1043,264 @@ Widget _buildSidebar({required bool closeDrawer}) {
     );
   }
 
-Widget _buildPdfCard(PdfModel pdf, double width) {
-  return InkWell(
-    borderRadius: BorderRadius.circular(26),
-    onTap: () {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => PdfViewerScreen(
-            title: pdf.title,
-            bytes: _pdfBytes(pdf),
-            url: pdf.url,
+  Widget _buildPdfCard(PdfModel pdf, double width) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(26),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PdfViewerScreen(
+              title: pdf.title,
+              bytes: _pdfBytes(pdf),
+              url: pdf.url,
+            ),
           ),
-        ),
-      );
-    },
-    child: Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: LinearGradient(
-          colors: [
-            Colors.white.withOpacity(.10),
-            Colors.white.withOpacity(.04),
+        );
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(26),
+          gradient: LinearGradient(
+            colors: [
+              Colors.white.withOpacity(.10),
+              Colors.white.withOpacity(.04),
+            ],
+          ),
+          border: Border.all(
+            color: Colors.white.withOpacity(.12),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(.25),
+              blurRadius: 20,
+              offset: const Offset(0, 12),
+            ),
           ],
         ),
-        border: Border.all(
-          color: Colors.white.withOpacity(.12),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(.25),
-            blurRadius: 20,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(26),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(.18),
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: const Icon(
-                        Icons.picture_as_pdf,
-                        color: Colors.redAccent,
-                        size: 36,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: Icon(
-                        bookmarkedIds.contains(pdf.id)
-                            ? Icons.bookmark
-                            : Icons.bookmark_border,
-                        color: bookmarkedIds.contains(pdf.id)
-                            ? Colors.amber
-                            : Colors.white,
-                      ),
-                      onPressed: () {
-
-                        setState(() {
-
-                          if (bookmarkedIds.contains(pdf.id)) {
-
-                            bookmarkedIds.remove(pdf.id);
-
-                          } else {
-
-                            bookmarkedIds.add(pdf.id);
-                          }
-                        });
-
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              bookmarkedIds.contains(pdf.id)
-                                  ? "Bookmark added"
-                                  : "Bookmark removed",
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.share_rounded, color: Colors.lightBlueAccent),
-                      onPressed: () {
-                        sharePdf(pdf);
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                      onPressed: () async {
-                        await deletePdf(pdf.id);
-
-                        setState(() {
-                          pdfFuture = fetchPdfsFromDatabase();
-                        });
-                      },
-                    ),
-                  ],
-                ),
-
-                const Spacer(),
-
-                Text(
-                  pdf.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.poppins(
-                    fontSize: width > 700 ? 20 : 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-
-                Text(
-                  pdf.description,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(.65),
-                    fontSize: 13,
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                Column(
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(26),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: Colors.deepPurple.withOpacity(.22),
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(.08),
-                          ),
+                          color: Colors.red.withOpacity(.18),
+                          borderRadius: BorderRadius.circular(18),
                         ),
-                        child: Text(
-                          pdf.category,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.poppins(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
+                        child: const Icon(
+                          Icons.picture_as_pdf,
+                          color: Colors.redAccent,
+                          size: 36,
+                        ),
+                      ),
+                      const Spacer(),
+
+                      IconButton(
+                        icon: Icon(
+                          bookmarkedIds.contains(pdf.id)
+                              ? Icons.bookmark
+                              : Icons.bookmark_border,
+                          color: bookmarkedIds.contains(pdf.id)
+                              ? Colors.amber
+                              : Colors.white,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            if (bookmarkedIds.contains(pdf.id)) {
+                              bookmarkedIds.remove(pdf.id);
+                            } else {
+                              bookmarkedIds.add(pdf.id);
+                            }
+                          });
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                bookmarkedIds.contains(pdf.id)
+                                    ? "Bookmark added"
+                                    : "Bookmark removed",
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+
+                      IconButton(
+                        icon: const Icon(
+                          Icons.share_rounded,
+                          color: Colors.lightBlueAccent,
+                        ),
+                        onPressed: () {
+                          sharePdf(pdf);
+                        },
+                      ),
+
+                      IconButton(
+                        icon: const Icon(
+                          Icons.delete_outline,
+                          color: Colors.red,
+                        ),
+                        onPressed: () async {
+                          await deletePdf(pdf.id);
+
+                          setState(() {
+                            pdfFuture = fetchPdfsFromDatabase();
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+
+                  const Spacer(),
+
+                  Text(
+                    pdf.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.poppins(
+                      fontSize: width > 700 ? 20 : 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Text(
+                    pdf.description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.65),
+                      fontSize: 13,
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  Column(
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.deepPurple.withOpacity(.22),
+                            borderRadius: BorderRadius.circular(30),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(.08),
+                            ),
+                          ),
+                          child: Text(
+                            pdf.category,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.poppins(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
                       ),
-                    ),
 
-                    const SizedBox(height: 14),
+                      const SizedBox(height: 14),
 
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 48,
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xff6D5DF6),
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(18),
-                                ),
-                              ),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => PdfViewerScreen(
-                                      title: pdf.title,
-                                      bytes: _pdfBytes(pdf),
-                                      url: pdf.url,
-                                    ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 48,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xff6D5DF6),
+                                  foregroundColor: Colors.white,
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(18),
                                   ),
-                                );
-                              },
-                              icon: const Icon(
-                                Icons.open_in_new_rounded,
-                                size: 18,
-                              ),
-                              label: Text(
-                                "Open",
-                                overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
+                                ),
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => PdfViewerScreen(
+                                        title: pdf.title,
+                                        bytes: _pdfBytes(pdf),
+                                        url: pdf.url,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(
+                                  Icons.open_in_new_rounded,
+                                  size: 18,
+                                ),
+                                label: Text(
+                                  "Open",
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
 
-                        const SizedBox(width: 10),
+                          const SizedBox(width: 10),
 
-                        Expanded(
-                          child: SizedBox(
-                            height: 48,
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xff16A34A),
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(18),
+                          Expanded(
+                            child: SizedBox(
+                              height: 48,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xff16A34A),
+                                  foregroundColor: Colors.white,
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(18),
+                                  ),
                                 ),
-                              ),
-                              onPressed: () {
-                                convertPdfToWord(pdf);
-                              },
-                              icon: const Icon(
-                                Icons.article_rounded,
-                                size: 18,
-                              ),
-                              label: Text(
-                                "Word",
-                                overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
+                                onPressed: () {
+                                  convertPdfToWord(pdf);
+                                },
+                                icon: const Icon(
+                                  Icons.article_rounded,
+                                  size: 18,
+                                ),
+                                label: Text(
+                                  "Word",
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  ).animate().fadeIn(duration: 500.ms).slideY(begin: .15);
-}
+    ).animate().fadeIn(duration: 500.ms).slideY(begin: .15);
+  }
   Widget _buildPdfGrid(double width, List<PdfModel> items) {
     if (items.isEmpty) {
       return Padding(
@@ -1291,8 +1418,7 @@ Widget _buildPdfCard(PdfModel pdf, double width) {
                       cursorWidth: 2,
 
                       style: GoogleFonts.poppins(
-                        color: Colors.black87,
-                        fontSize: 16,
+                        color: Colors.white,                     fontSize: 16,
                         fontWeight: FontWeight.w500,
                       ),
                       decoration: InputDecoration(
@@ -1688,7 +1814,7 @@ Widget _buildEditPdfsPage(double width) {
           ),
 
           const SizedBox(height: 16),
-
+          _editPdfToolsBar(),
           if (pdfs.isEmpty)
             const Center(child: Text("No PDFs found"))
           else
@@ -2292,7 +2418,9 @@ Widget _buildDeletePdfsPage(double width) {
       case "Convert to PDF":
       case "पीडीएफ कन्वर्ट":
         return _buildConvertPdfPage(width);
-
+      case "Convert from PDF":
+      case "पीडीएफ से कन्वर्ट":
+        return _buildConvertFromPdfPage(width);
       case "Settings":
       case "सेटिंग्स":
         return _buildSettingsPage();
@@ -2448,79 +2576,156 @@ Widget _buildConvertPdfPage(double width) {
     ],
   );
 }
+Widget _buildConvertFromPdfPage(double width) {
+  final isWide = width > 700;
 
-Widget _organizeCard({
-  required String title,
-  required String subtitle,
-  required IconData icon,
-  required Color color,
-  required VoidCallback onTap,
-}) {
-  return InkWell(
-    borderRadius: BorderRadius.circular(26),
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: LinearGradient(
-          colors: [
-            color.withOpacity(.30),
-            Colors.white.withOpacity(.05),
+  return ListView(
+    padding: EdgeInsets.all(isWide ? 24 : 14),
+    children: [
+      Text(
+        "Convert from PDF",
+        style: GoogleFonts.poppins(
+          fontSize: isWide ? 30 : 24,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+      const SizedBox(height: 10),
+      Text(
+        "Convert PDF into JPG, Word, PowerPoint and Excel.",
+        style: GoogleFonts.poppins(color: Colors.white70),
+      ),
+      const SizedBox(height: 24),
+
+      GridView.count(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        crossAxisCount: isWide ? 2 : 1,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: isWide ? 2.2 : 2.6,
+        children: [
+          _organizeCard(
+            title: "PDF to JPG",
+            subtitle: "Convert PDF pages into images",
+            icon: Icons.image_rounded,
+            color: Colors.amber,
+            onTap: () => pickPdfForConvertFromPdf(
+              "pdf-to-jpg",
+              "zip",
+              "JPG ZIP",
+            ),
+          ),
+          _organizeCard(
+            title: "PDF to Word",
+            subtitle: "Convert PDF into Word document",
+            icon: Icons.article_rounded,
+            color: Colors.blue,
+            onTap: () => pickPdfForConvertFromPdf(
+              "convert-pdf-to-word",
+              "docx",
+              "Word",
+            ),
+          ),
+          _organizeCard(
+            title: "PDF to PowerPoint",
+            subtitle: "Convert PDF into PPT",
+            icon: Icons.slideshow_rounded,
+            color: Colors.deepOrange,
+            onTap: () => pickPdfForConvertFromPdf(
+              "pdf-to-ppt",
+              "pptx",
+              "PowerPoint",
+            ),
+          ),
+          _organizeCard(
+            title: "PDF to Excel",
+            subtitle: "Convert PDF into Excel",
+            icon: Icons.table_chart_rounded,
+            color: Colors.green,
+            onTap: () => pickPdfForConvertFromPdf(
+              "pdf-to-excel",
+              "xlsx",
+              "Excel",
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+  Widget _organizeCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(26),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(26),
+          gradient: LinearGradient(
+            colors: [
+              color.withOpacity(.30),
+              Colors.white.withOpacity(.05),
+            ],
+          ),
+          border: Border.all(color: Colors.white.withOpacity(.12)),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(.25),
+              blurRadius: 24,
+              offset: const Offset(0, 12),
+            ),
           ],
         ),
-        border: Border.all(color: Colors.white.withOpacity(.12)),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(.25),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: color.withOpacity(.25),
-              borderRadius: BorderRadius.circular(20),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: color.withOpacity(.25),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Icon(icon, color: Colors.white, size: 34),
             ),
-            child: Icon(icon, color: Colors.white, size: 34),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.poppins(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    color: Colors.white70,
+                  const SizedBox(height: 6),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: Colors.white70,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70),
-        ],
+            const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70),
+          ],
+        ),
       ),
-    ),
-  ).animate().fadeIn(duration: 400.ms).slideY(begin: .12);
-}
+    ).animate().fadeIn(duration: 400.ms).slideY(begin: .12);
+  }
 
 Future<void> mergePdfFiles() async {
   try {
@@ -2774,7 +2979,7 @@ Future<void> convertOfficeFileToPdf({
 
       final dir = await getApplicationDocumentsDirectory();
       final pdfFile = File("${dir.path}/$safeName.pdf");
-
+      await pdfFile.writeAsBytes(pdfBytes, flush: true);
 
 
 
@@ -2807,6 +3012,151 @@ Future<void> convertOfficeFileToPdf({
     );
   }
 }
+  Future<void> editPdfTool({
+    required String endpoint,
+    required String outputName,
+    String? watermark,
+  }) async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+        withData: true,
+      );
+
+      if (result == null || result.files.single.bytes == null) return;
+
+      final selectedFile = result.files.single;
+
+      final request = http.MultipartRequest(
+        "POST",
+        Uri.parse("$baseUrl/$endpoint"),
+      );
+
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          "pdf",
+          selectedFile.bytes!,
+          filename: selectedFile.name,
+        ),
+      );
+
+      if (watermark != null) {
+        request.fields["watermark"] = watermark;
+      }
+
+      final response = await request.send();
+
+      if (response.statusCode == 200) {
+        final bytes = await response.stream.toBytes();
+
+        await uploadPdf(
+          bytes: Uint8List.fromList(bytes),
+          fileName: outputName,
+          title: outputName.replaceAll(".pdf", ""),
+          category: "Edited PDF",
+          description: "PDF edited successfully",
+        );
+
+        refreshPdfs();
+
+        final dir = await getApplicationDocumentsDirectory();
+        final file = File("${dir.path}/$outputName");
+        await file.writeAsBytes(bytes, flush: true);
+        await OpenFilex.open(file.path);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("PDF edited successfully")),
+        );
+      } else {
+        final error = await response.stream.bytesToString();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Edit failed: $error")),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Edit error: $e")),
+      );
+    }
+  }
+
+  void rotatePdf() {
+    editPdfTool(
+      endpoint: "rotate-pdf",
+      outputName: "rotated_pdf.pdf",
+    );
+  }
+
+  void addPageNumbers() {
+    editPdfTool(
+      endpoint: "add-page-numbers",
+      outputName: "numbered_pdf.pdf",
+    );
+  }
+
+  void addWatermark() {
+    editPdfTool(
+      endpoint: "add-watermark",
+      outputName: "watermarked_pdf.pdf",
+      watermark: "PDF Viewer App",
+    );
+  }
+
+  void cropPdf() {
+    editPdfTool(
+      endpoint: "crop-pdf",
+      outputName: "cropped_pdf.pdf",
+    );
+  }
+  Widget _editPdfToolsBar() {
+    final tools = [
+      ["Rotate PDF", Icons.rotate_right_rounded, rotatePdf],
+      ["Add page numbers", Icons.format_list_numbered_rounded, addPageNumbers],
+      ["Add watermark", Icons.approval_rounded, addWatermark],
+      ["Crop PDF", Icons.crop_rounded, cropPdf],
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "EDIT PDF",
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: Colors.white70,
+            ),
+          ),
+          const SizedBox(height: 10),
+          ...tools.map((tool) {
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Container(
+                height: 30,
+                width: 30,
+                decoration: BoxDecoration(
+                  color: const Color(0xffB46A9B),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Icon(tool[1] as IconData, color: Colors.white, size: 18),
+              ),
+              title: Text(
+                tool[0] as String,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              onTap: tool[2] as VoidCallback,
+            );
+          }),
+        ],
+      ),
+    );
+  }
 @override
 Widget build(BuildContext context) {
 
